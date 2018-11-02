@@ -8,38 +8,39 @@ using namespace std;
 
 namespace voltdb {
 
-class Partition;
+class PartitionVertex;
+class EDPIndex;
 
 class PartitionEdge {
 public:
-	PartitionEdge(void);
+	PartitionEdge(Edge* edge, PartitionVertex* fromVertex, PartitionVertex* toVertex, int weightField, int labelField, bool directed);
 	~PartitionEdge(void);
 
 	Edge* getEdge();
 
 	int getID();
-	int getFromID();
-	int getToID();
+	PartitionVertex* getFrom();
+	PartitionVertex* getTo();
 
-	float getWeight();
+	double getWeight();
 	int getLabel();
-	bool isDirected();
 
 private:
 	Edge* edge;
 
 	int eID;
-	int fromID;
-	int toID;
+	PartitionVertex* fromV;
+	PartitionVertex* toV;
 
-	float weight;
+	double weight;
 	int label;
-	bool directed;
 };
+
+class Partition;
 
 class PartitionVertex {
 public:
-	PartitionVertex(void);
+	PartitionVertex(Vertex * vertex);
 	~PartitionVertex(void);
 
 	Vertex* getVertex();
@@ -47,14 +48,16 @@ public:
 	int getID();
 	bool isBridge();
 	int getComponentID();
+	Partition* getPartition();
 
-	vector<PartitionEdge*>* getInEdges();
-	vector<PartitionEdge*>* getOutEdges();
+	map<int, PartitionEdge*>* getInEdges();
+	map<int, PartitionEdge*>* getOutEdges();
 
 	vector<Partition*>* getOtherHosts();
 
-	//Adds an edge to this vertex and updates OtherHostsList if applicable
-	void addEdge(PartitionEdge* edge);
+	void setPartition(Partition * p) { partition = p; }
+	//Adds an edge to this vertex and updates OtherHostsList if applicable. Partition must be set first
+	void addEdge(PartitionEdge* edge, EDPIndex* edp);
 
 private:
 	Vertex* vertex;
@@ -63,20 +66,22 @@ private:
 	bool bridge;
 	int componentID;
 
-	vector<PartitionEdge*> inEdges;
-	vector<PartitionEdge*> outEdges;
+	Partition* partition;
 
-	vector<Partition*> otherHosts;
+	map<int, PartitionEdge*> inEdges;
+	map<int, PartitionEdge*> outEdges;
+
+	map<int, Partition*> otherHosts;
 };
 
 class MonochromePath{
 
 public:
-	MonochromePath(int src, int dest, int weight);
+	MonochromePath(int src, int dest, int cost);
 protected:
 	int src_id;
 	int dest_id;
-	int weight;
+	int cost;
 
 	vector<PartitionEdge*> pathEdges;
 };
@@ -90,7 +95,7 @@ public:
 	int getDestination();
 	int getCost();
 
-	vector<PartitionEdge*>* getPath();
+	vector<PartitionEdge*> getPath();
 
 	//Returns the size of the cache entry in bytes
 	int getEntrySize();
@@ -111,7 +116,7 @@ public:
 
 	int getLabel();
 
-	vector<map<int, PartitionVertex>>* getPartitions();
+	map<int, PartitionVertex>* getVertexes();
 	map<int, PartitionEdge>* getEdges();
 
 	PartitionVertex* addVertex(int id);
@@ -120,7 +125,7 @@ private:
 	int label;
 	//Map of VertexID to PartitionVertex object in this Partition
 	map<int, PartitionVertex > p_vertexes;
-	map<int, PartitionEdge > m_edges;
+	map<int, PartitionEdge > p_edges;
 };
 
 class EDPIndex{
@@ -128,10 +133,24 @@ class EDPIndex{
 	friend class Partition;
 
 public:
+	EDPIndex();
+	static EDPIndex buildIndex(GraphView* g, int numLabels, int labelColumn, uint32_t cacheSize);
+
+	void addVertex(Vertex * v);
+	void addEdge(Edge * e);
+
+	Partition* getPartition(int label);
 
 protected:
-	GraphView graph;
+
 private:
+	GraphView* graph;
+	Partition* partitions;
+
+	//Direct references from vertex ID to vertex, outside of partitions
+	map<int, PartitionVertex*> i_vertexes;
+
+	uint64_t cacheSize;
 
 };
 
