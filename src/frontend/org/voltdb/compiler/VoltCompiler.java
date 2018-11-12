@@ -661,9 +661,14 @@ public class VoltCompiler {
         if (catalog == null) {
             return null;
         }
+        
+        //System.out.println("VoltCompiler.compileInternal 665 catalog = "+catalog.toString());
 
         // Build DDL from Catalog Data
         String ddlWithBatchSupport = CatalogSchemaTools.toSchema(catalog, m_importLines);
+        
+        //System.out.println("VoltCompiler.compileInternal 668 ddlWithBatchSupport = "+ddlWithBatchSupport);
+        
         m_canonicalDDL = CatalogSchemaTools.toSchemaWithoutInlineBatches(ddlWithBatchSupport);
 
         // generate the catalog report and write it to disk
@@ -720,6 +725,8 @@ public class VoltCompiler {
         // WRITE CATALOG TO JAR HERE
         final String catalogCommands = catalog.serialize();
 
+        //System.out.println("VoltCompiler.compileInternal 728 catalogCommands = "+catalogCommands);
+        
         byte[] catalogBytes = catalogCommands.getBytes(Constants.UTF8ENCODING);
 
         try {
@@ -1183,6 +1190,8 @@ public class VoltCompiler {
         ddlcompiler.loadAutogenExportTableSchema(db, previousDBIfAny, whichProcs);
 
         ddlcompiler.compileToCatalog(db);
+        //org.voltdb.VLog.GLog("VoltCompiler", "compileDatabase.compileToCatalog", 1186, 
+    	//		"db =  " + db);
 
         // add database estimates info
         addDatabaseEstimatesInfo(m_estimates, db);
@@ -1226,6 +1235,8 @@ public class VoltCompiler {
         addExtraClasses(jarOutput);
 
         compileRowLimitDeleteStmts(db, hsql, ddlcompiler.getLimitDeleteStmtToXmlEntries());
+        
+        ddlcompiler.PrintCatalog();
     }
 
     private void compileRowLimitDeleteStmts(

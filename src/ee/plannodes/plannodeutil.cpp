@@ -68,8 +68,12 @@
 #include "plannodes/unionnode.h"
 #include "plannodes/updatenode.h"
 #include "plannodes/partitionbynode.h"
-
 #include <sstream>
+
+#include "EdgeScanNode.h"
+#include "PathScanNode.h"
+#include "VertexScanNode.h"
+#include "NestedLoopPathNode.h"
 
 namespace plannodeutil {
 
@@ -208,6 +212,30 @@ voltdb::AbstractPlanNode* getEmptyPlanNode(voltdb::PlanNodeType type) {
         // ------------------------------------------------------------------
         case (voltdb::PLAN_NODE_TYPE_PARTITIONBY):
             ret = new voltdb::PartitionByPlanNode();
+            break;
+        // ------------------------------------------------------------------
+        // msaber: VertexScan
+        // ------------------------------------------------------------------
+        case (voltdb::PLAN_NODE_TYPE_VERTEXSCAN):
+            ret = new voltdb::VertexScanPlanNode();
+            break;
+            // ------------------------------------------------------------------
+            // msaber: EdgeScan
+            // ------------------------------------------------------------------
+        case (voltdb::PLAN_NODE_TYPE_EDGESCAN):
+        	ret = new voltdb::EdgeScanPlanNode();
+            break;
+            // ------------------------------------------------------------------
+            // msaber: PathScan
+            // ------------------------------------------------------------------
+        case (voltdb::PLAN_NODE_TYPE_PATHSCAN):
+        	ret = new voltdb::PathScanPlanNode();
+            break;
+            // ------------------------------------------------------------------
+            // msaber: PathScan
+            // ------------------------------------------------------------------
+        case (voltdb::PLAN_NODE_TYPE_NESTEDLOOPPATH):
+            ret = new voltdb::NestedLoopPathNode();
             break;
         // default: Don't provide a default, let the compiler enforce complete coverage.
     }

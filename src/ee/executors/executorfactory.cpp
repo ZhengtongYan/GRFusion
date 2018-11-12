@@ -70,6 +70,10 @@
 #include "executors/unionexecutor.h"
 #include "executors/updateexecutor.h"
 #include "executors/partitionbyexecutor.h"
+#include "executors/VertexScanExecutor.h"
+#include "executors/EdgeScanExecutor.h"
+#include "executors/PathScanExecutor.h"
+#include "executors/NestedLoopPathExecutor.h"
 
 #include "plannodes/abstractplannode.h"
 
@@ -96,7 +100,8 @@ AbstractExecutor* getNewExecutor(VoltDBEngine *engine,
     case PLAN_NODE_TYPE_MATERIALIZE: return new MaterializeExecutor(engine, abstract_node);
     case PLAN_NODE_TYPE_MATERIALIZEDSCAN: return new MaterializedScanExecutor(engine, abstract_node);
     case PLAN_NODE_TYPE_MERGERECEIVE: return new MergeReceiveExecutor(engine, abstract_node);
-    case PLAN_NODE_TYPE_NESTLOOP: return new NestLoopExecutor(engine, abstract_node);
+    //case PLAN_NODE_TYPE_NESTLOOP: return new NestLoopExecutor(engine, abstract_node);
+    case PLAN_NODE_TYPE_NESTLOOP: return new NestedLoopPathExecutor(engine, abstract_node);
     case PLAN_NODE_TYPE_NESTLOOPINDEX: return new NestLoopIndexExecutor(engine, abstract_node);
     case PLAN_NODE_TYPE_ORDERBY: return new OrderByExecutor(engine, abstract_node);
     case PLAN_NODE_TYPE_PROJECTION: return new ProjectionExecutor(engine, abstract_node);
@@ -108,6 +113,11 @@ AbstractExecutor* getNewExecutor(VoltDBEngine *engine,
     case PLAN_NODE_TYPE_UNION: return new UnionExecutor(engine, abstract_node);
     case PLAN_NODE_TYPE_UPDATE: return new UpdateExecutor(engine, abstract_node);
     case PLAN_NODE_TYPE_PARTITIONBY: return new PartitionByExecutor(engine, abstract_node);
+    //msaber
+    case PLAN_NODE_TYPE_VERTEXSCAN: return new VertexScanExecutor(engine, abstract_node);
+    case PLAN_NODE_TYPE_EDGESCAN: return new EdgeScanExecutor(engine, abstract_node);
+    case PLAN_NODE_TYPE_PATHSCAN: return new PathScanExecutor(engine, abstract_node);
+    case PLAN_NODE_TYPE_NESTEDLOOPPATH: return new NestedLoopPathExecutor(engine, abstract_node);
     // default: Don't provide a default, let the compiler enforce complete coverage.
     }
     VOLT_ERROR("Undefined plan node type %d", (int) type);

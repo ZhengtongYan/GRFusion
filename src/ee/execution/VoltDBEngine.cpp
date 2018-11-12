@@ -59,6 +59,7 @@
 #include "catalog/planfragment.h"
 #include "catalog/statement.h"
 #include "catalog/table.h"
+#include "catalog/graphview.h"
 #include "common/ElasticHashinator.h"
 #include "common/executorcontext.hpp"
 #include "common/FailureInjection.h"
@@ -76,10 +77,12 @@
 #include "plannodes/plannodefragment.h"
 #include "storage/tablefactory.h"
 #include "storage/persistenttable.h"
+#include "graph/GraphView.h"
 #include "storage/streamedtable.h"
 #include "storage/MaterializedViewHandler.h"
 #include "storage/MaterializedViewTriggerForWrite.h"
 #include "storage/TableCatalogDelegate.hpp"
+#include "graph/GraphViewCatalogDelegate.h"
 #include "storage/CompatibleDRTupleStream.h"
 #include "storage/DRTupleStream.h"
 #include "org_voltdb_jni_ExecutionEngine.h" // to use static values
@@ -99,11 +102,13 @@
 #include <sstream>
 #include <locale>
 #include <typeinfo>
+#include <string>
 
 ENABLE_BOOST_FOREACH_ON_CONST_MAP(Column);
 ENABLE_BOOST_FOREACH_ON_CONST_MAP(Index);
 ENABLE_BOOST_FOREACH_ON_CONST_MAP(MaterializedViewInfo);
 ENABLE_BOOST_FOREACH_ON_CONST_MAP(Table);
+ENABLE_BOOST_FOREACH_ON_CONST_MAP(GraphView); //msaber
 
 static const size_t PLAN_CACHE_SIZE = 1000;
 // how many initial tuples to scan before calling into java
@@ -116,9 +121,13 @@ namespace voltdb {
 
 // These typedefs prevent confusion in the parsing of BOOST_FOREACH.
 typedef std::pair<std::string, TableCatalogDelegate*> LabeledTCD;
+//msaber
+typedef std::pair<std::string, GraphViewCatalogDelegate*> LabeledGVCD;
 typedef std::pair<std::string, catalog::Column*> LabeledColumn;
 typedef std::pair<std::string, catalog::Index*> LabeledIndex;
 typedef std::pair<std::string, catalog::Table*> LabeledTable;
+//msaber
+typedef std::pair<std::string, catalog::GraphView*> LabeledGraphView;
 typedef std::pair<std::string, catalog::MaterializedViewInfo*> LabeledView;
 
 /**
@@ -168,6 +177,8 @@ VoltDBEngine::VoltDBEngine(Topend *topend, LogProxy *logProxy)
       m_currExecutorVec(NULL),
       m_tuplesModifiedStack()
 {
+	LogManager::GLog("VoltDBEngine", "Constructor", 171,
+			"init VoltDBEngine with topend and logProxy");
 }
 
 bool
@@ -182,6 +193,9 @@ VoltDBEngine::initialize(int32_t clusterIndex,
                          bool createDrReplicatedStream,
                          int32_t compactionThreshold)
 {
+	std::stringstream params;
+	params << "clusterIndex = " << clusterIndex << ", siteId = " << siteId;
+	LogManager::GLog("VoltDBEngine", "initialize", 187, params.str());
     m_clusterIndex = clusterIndex;
     m_siteId = siteId;
     m_partitionId = partitionId;
@@ -253,7 +267,7 @@ VoltDBEngine::~VoltDBEngine() {
     // greatly increases the risk of accidentally freeing the same
     // object multiple times.  Change at your own risk.
     // --izzy 8/19/2009
-
+	LogManager::GLog("VoltDBEngine", "Destructor", 262, "destructor");
     // clean up execution plans
     m_plans.reset();
 
@@ -291,11 +305,15 @@ VoltDBEngine::~VoltDBEngine() {
 // OBJECT ACCESS FUNCTIONS
 // ------------------------------------------------------------------
 catalog::Catalog *VoltDBEngine::getCatalog() const {
+	LogManager::GLog("VoltDBEngine", "getCatalog", 302, "getting catalog");
     return (m_catalog.get());
 }
 
 Table* VoltDBEngine::getTable(int32_t tableId) const
 {
+	//std::stringstream params;
+	//params << "tableId = " << tableId;
+	//LogManager::GLog("VoltDBEngine", "getTable", 308, params.str());
     // Caller responsible for checking null return value.
     return findInMapOrNull(tableId, m_tables);
 }
@@ -323,14 +341,38 @@ catalog::Table* VoltDBEngine::getCatalogTable(const std::string& name) const {
     return NULL;
 }
 
+GraphViewCatalogDelegate* VoltDBEngine::getGraphViewDelegate(const std::string& name) const
+{
+    // Caller responsible for checking null return value.
+    return findInMapOrNull(name, m_graphViewDelegatesByName);
+}
+
+catalog::GraphView* VoltDBEngine::getCatalogGraphView(const std::string& name) const {
+    // iterate over all of the tables in the new catalog
+    BOOST_FOREACH (LabeledGraphView labeledTable, m_database->graphViews()) {
+        catalog::GraphView *catalogGraphView = labeledTable.second;
+        if (catalogGraphView->name() == name) {
+            return catalogGraphView;
+        }
+    }
+    return NULL;
+}
+
 void VoltDBEngine::serializeTable(int32_t tableId, SerializeOutput& out) const
 {
+	std::stringstream params;
+	params << "tableId = " << tableId;
+	LogManager::GLog("VoltDBEngine", "serializeTable", 340, params.str());
     // Just look in our list of tables
     Table* table = getTable(tableId);
     if ( ! table) {
         throwFatalException("Unable to find table for TableId '%d'", (int) tableId);
     }
     table->serializeTo(out);
+}
+
+int64_t VoltDBEngine::getSiteId() {
+    return m_siteId;
 }
 
 // ------------------------------------------------------------------
@@ -373,6 +415,10 @@ int VoltDBEngine::executePlanFragments(int32_t numFragments,
                                        int64_t uniqueId,
                                        int64_t undoToken)
 {
+	std::stringstream params;
+	params << "numFragments = " << numFragments;
+
+	LogManager::GLog("VoltDBEngine", "executePlanFragment(s)!", 410, params.str());
     // count failures
     int failures = 0;
 
@@ -391,6 +437,9 @@ int VoltDBEngine::executePlanFragments(int32_t numFragments,
     m_tuplesProcessedInBatch = 0;
     m_tuplesProcessedInFragment = 0;
     m_tuplesProcessedSinceReport = 0;
+
+    //timeval begin, end;
+    //gettimeofday (&begin, NULL);
 
     for (m_currentIndexInBatch = 0; m_currentIndexInBatch < numFragments; ++m_currentIndexInBatch) {
 
@@ -425,6 +474,18 @@ int VoltDBEngine::executePlanFragments(int32_t numFragments,
         m_stringPool.purge();
     }
 
+    //gettimeofday (&end, NULL);
+
+    //double totalTimeInMilliSeconds =  ((double)(end.tv_usec - begin.tv_usec) / 1000.0) + ((double)(end.tv_sec - begin.tv_sec) * 1000.0);
+    //std::stringstream execTimeString;
+    //execTimeString << "msec," << totalTimeInMilliSeconds;
+
+    //TODO: toggle the display of the execution time
+    //write the time in
+    //cout << totalTimeInMilliSeconds << endl;
+    //LogManager::GLog("VoltDBEngine", "executePlanFragment(s)!", 483, "End of execution!");
+    //LogManager::getThreadLogger(LOGGERID_HOST)->log(voltdb::LOGLEVEL_WARN, execTimeString.str().c_str());
+    //LogManager::GLog("VoltDBEngine", "executePlanFragment(s)!", 485, execTimeString.str());
     return failures;
 }
 
@@ -437,6 +498,10 @@ int VoltDBEngine::executePlanFragment(int64_t planfragmentId,
                                       bool first,
                                       bool last)
 {
+	//LogManager::getThreadLogger(LOGGERID_HOST)->log(voltdb::LOGLEVEL_WARN, "This is my Testing, Warn!");
+	std::stringstream params;
+	params << "planFragmentId = " << planfragmentId;
+	LogManager::GLog("VoltDBEngine", "executePlanFragment", 477, params.str());
     assert(planfragmentId != 0);
 
     m_currentInputDepId = static_cast<int32_t>(inputDependencyId);
@@ -566,6 +631,13 @@ int VoltDBEngine::loadNextDependency(Table* destination) {
 }
 
 // -------------------------------------------------
+// Request Data Functions
+// -------------------------------------------------
+int VoltDBEngine::invokeRequestData(Table* destination, long destinationHsId) {
+    return m_topend->invokeRequestData(destination, &m_stringPool, destinationHsId);
+}
+
+// -------------------------------------------------
 // Catalog Functions
 // -------------------------------------------------
 bool VoltDBEngine::updateCatalogDatabaseReference() {
@@ -586,6 +658,10 @@ bool VoltDBEngine::updateCatalogDatabaseReference() {
 }
 
 bool VoltDBEngine::loadCatalog(const int64_t timestamp, const std::string &catalogPayload) {
+	std::stringstream params;
+	//params << "catalogPayload = " << catalogPayload;
+	params << "catalogPayload = " << "omitted by msaber for simplicity";
+	LogManager::GLog("VoltDBEngine", "loadCatalog", 610, params.str());
     assert(m_executorContext != NULL);
     ExecutorContext* executorContext = ExecutorContext::getExecutorContext();
     if (executorContext == NULL) {
@@ -763,6 +839,7 @@ static bool haveDifferentSchema(catalog::Table *t1, voltdb::PersistentTable *t2)
 bool
 VoltDBEngine::processCatalogAdditions(int64_t timestamp)
 {
+	LogManager::GLog("VoltDBEngine", "processCatalogAdditions", 788, "process catalog additions (tables first)");
     // iterate over all of the tables in the new catalog
     BOOST_FOREACH (LabeledTable labeledTable, m_database->tables()) {
         // get the catalog's table object
@@ -775,7 +852,7 @@ VoltDBEngine::processCatalogAdditions(int64_t timestamp)
             //////////////////////////////////////////
             // add a completely new table
             //////////////////////////////////////////
-
+            LogManager::GLog("VoltDBEngine", "processCatalogAdditions", 802, "adding a completely new table for " + catalogTable->name());
             tcd = new TableCatalogDelegate(catalogTable->signature(),
                                            m_compactionThreshold);
             // use the delegate to init the table and create indexes n' stuff
@@ -1072,6 +1149,53 @@ VoltDBEngine::processCatalogAdditions(int64_t timestamp)
         }
     }
 
+    //handle the graph views
+    LogManager::GLog("VoltDBEngine", "processCatalogAdditions", 1104, "process catalog additions (graph views)");
+	// iterate over all of the graph views in the new catalog
+	BOOST_FOREACH (LabeledGraphView labeledGraphView, m_database->graphViews()) {
+		// get the catalog's table object
+		catalog::GraphView *catalogGraphView = labeledGraphView.second;
+		// get the delegate for the table... add the table if it's null
+		GraphViewCatalogDelegate* gcd = findInMapOrNull(catalogGraphView->path(), m_graphViewCatalogDelegates);
+		if (!gcd) {
+			VOLT_TRACE("add a completely new graph view or rebuild an empty graph view...");
+
+			//////////////////////////////////////////
+			// add a completely new graph view
+			//////////////////////////////////////////
+			LogManager::GLog("VoltDBEngine", "processCatalogAdditions", 1117, "adding a completely new graph view for " + catalogGraphView->name());
+			gcd = new GraphViewCatalogDelegate(catalogGraphView->signature(),
+										   m_compactionThreshold);
+			// use the delegate to init the table and create indexes n' stuff
+			Table* vTable = findInMapOrNull(catalogGraphView->VTable()->path(), m_catalogDelegates)->getTable();
+			Table* eTable = findInMapOrNull(catalogGraphView->ETable()->path(), m_catalogDelegates)->getTable();
+			string pathsTableName = "TEMPPATHS";
+			if (vTable == NULL || eTable == NULL)
+			{
+				LogManager::GLog("VoltDBEngine", "processCatalogAdditions", 1125, "unable to get vTable or eTable or both");
+				continue;
+			}
+			LogManager::GLog("VoltDBEngine", "processCatalogAdditions", 1128, "before calling gcd.init");
+			//TODO: pTable is not used as we assume one path table schema. The parameter may allow varying the path schema according to the view definition in the future
+			Table* pTable = NULL;
+			gcd->init(*m_database, *catalogGraphView, vTable, eTable, pTable);
+			m_graphViewCatalogDelegates[catalogGraphView->path()] = gcd;
+			GraphView* graphView = gcd->getGraphView();
+			m_graphViewDelegatesByName[graphView->name()] = gcd;
+		}
+		else {
+			//msaber: nothing to do here for now
+			//GraphView *graphView = gcd->getGraphView();
+
+			//
+			// Same schema, but TUPLE_LIMIT may change.
+			// Because there is no table rebuilt work next, no special need to take care of
+			// the new tuple limit.
+			//
+			//persistentTable->setTupleLimit(catalogTable->tuplelimit());
+		}
+	}
+
     // new plan fragments are handled differently.
     return true;
 }
@@ -1085,6 +1209,10 @@ VoltDBEngine::processCatalogAdditions(int64_t timestamp)
 bool
 VoltDBEngine::updateCatalog(const int64_t timestamp, const std::string &catalogPayload)
 {
+	std::stringstream params;
+	//params << "catalogPayload = " << catalogPayload;
+	params << "catalogPayload = " << "ommited my msaber for simplicity";
+	LogManager::GLog("VoltDBEngine", "updateCatalog", 1113, params.str());
     // clean up execution plans when the tables underneath might change
     if (m_plans) {
         m_plans->clear();
@@ -1097,7 +1225,7 @@ VoltDBEngine::updateCatalog(const int64_t timestamp, const std::string &catalogP
     // apply the diff commands to the existing catalog
     // throws SerializeEEExceptions on error.
     m_catalog->execute(catalogPayload);
-
+    LogManager::GLog("VoltDBEngine", "updateCatalog", 1127, "catalog has been updated by calling m_catalog->execute");
     // Set DR flag based on current catalog state
     catalog::Cluster* catalogCluster = m_catalog->clusters().get("cluster");
     m_executorContext->drStream()->m_enabled = catalogCluster->drProducerEnabled();
@@ -1119,7 +1247,14 @@ VoltDBEngine::updateCatalog(const int64_t timestamp, const std::string &catalogP
         return false;
     }
 
+    LogManager::GLog("VoltDBEngine", "updateCatalog", 1148, "just before calling VoltDBEngine.rebuildTableCollections()");
     rebuildTableCollections();
+    LogManager::GLog("VoltDBEngine", "updateCatalog", 1151, "just after calling VoltDBEngine.rebuildTableCollections()");
+
+    //msaber: do similar call to re/build the graph views
+    LogManager::GLog("VoltDBEngine", "updateCatalog", 1155, "just before calling VoltDBEngine.rebuildGraphViewCollections()");
+    rebuildGraphViewCollections();
+    LogManager::GLog("VoltDBEngine", "updateCatalog", 1157, "just after calling VoltDBEngine.rebuildGraphViewCollections()");
 
     initMaterializedViewsAndLimitDeletePlans();
 
@@ -1136,6 +1271,9 @@ VoltDBEngine::loadTable(int32_t tableId,
                         bool returnUniqueViolations,
                         bool shouldDRStream)
 {
+	std::stringstream params;
+	params << "tableId = " << tableId;
+	LogManager::GLog("VoltDBEngine", "loadTable", 1167, params.str());
     //Not going to thread the unique id through.
     //The spHandle and lastCommittedSpHandle aren't really used in load table
     //since their only purpose as of writing this (1/2013) they are only used
@@ -1195,6 +1333,7 @@ void VoltDBEngine::rebuildTableCollections()
             continue;
         }
         Table* localTable = tcd->getTable();
+        LogManager::GLog("VoltDBEngine", "rebuildTableCollections", 1128, "tableName = " + localTable->name());
         assert(localTable);
         if (!localTable) {
             VOLT_ERROR("DEBUG-NULL");//:%s", cd.first.c_str());
@@ -1204,8 +1343,12 @@ void VoltDBEngine::rebuildTableCollections()
         assert(m_database);
         catalog::Table *catTable = m_database->tables().get(localTable->name());
         int32_t relativeIndexOfTable = catTable->relativeIndex();
+        std::stringstream params;
+        params << "table name = " << catTable->name() << ", relative index = " << relativeIndexOfTable;
+        LogManager::GLog("VoltDBEngine", "rebuildTableCollections", 1317, params.str());
         m_tables[relativeIndexOfTable] = localTable;
         m_tablesByName[tcd->getTable()->name()] = localTable;
+
 
         TableStats* stats;
         PersistentTable* persistentTable = tcd->getPersistentTable();
@@ -1231,6 +1374,55 @@ void VoltDBEngine::rebuildTableCollections()
                                               relativeIndexOfTable,
                                               stats);
 
+
+    }
+    resetDRConflictStreamedTables();
+}
+
+
+void VoltDBEngine::rebuildGraphViewCollections()
+{
+    // 1. See header comments explaining m_snapshottingTables.
+    // 2. Don't clear m_exportTables. They are still exporting, even if deleted.
+    // 3. Clear everything else.
+    //m_tables.clear();
+	m_graphViews.clear();
+    //m_tablesByName.clear();
+	m_graphViewsByName.clear();
+    //m_tablesBySignatureHash.clear();
+
+    // need to re-map all the table ids / indexes
+    //getStatsManager().unregisterStatsSource(STATISTICS_SELECTOR_TYPE_TABLE);
+    //getStatsManager().unregisterStatsSource(STATISTICS_SELECTOR_TYPE_INDEX);
+
+    // walk the table delegates and update local table collections
+    BOOST_FOREACH (LabeledGVCD cd, m_graphViewCatalogDelegates) {
+        GraphViewCatalogDelegate *gcd = cd.second;
+        assert(gcd);
+        if (!gcd) {
+            continue;
+        }
+        GraphView* localGraphView = gcd->getGraphView();
+
+        assert(localGraphView);
+        if (!localGraphView) {
+            VOLT_ERROR("DEBUG-NULL");//:%s", cd.first.c_str());
+            std::cout << "DEBUG-NULL:" << cd.first << std::endl;
+            continue;
+        }
+        LogManager::GLog("VoltDBEngine", "rebuildGraphViewCollections", 1128, "graphViewName = " + localGraphView->name());
+
+        assert(m_database);
+        catalog::GraphView *catGraphView = m_database->graphViews().get(localGraphView->name());
+
+        int32_t relativeIndexOfGraphView = catGraphView->relativeIndex();
+        std::stringstream params;
+        params << "graph view name = " << catGraphView->name() << ", relative index = " << relativeIndexOfGraphView;
+        LogManager::GLog("VoltDBEngine", "rebuildGraphViewCollections", 1384, params.str());
+        m_graphViews[relativeIndexOfGraphView] = localGraphView;
+        m_graphViewsByName[gcd->getGraphView()->name()] = localGraphView;
+
+       //stats should be handled here later
     }
     resetDRConflictStreamedTables();
 }
@@ -1259,6 +1451,9 @@ void VoltDBEngine::resetDRConflictStreamedTables()
 
 void VoltDBEngine::setExecutorVectorForFragmentId(int64_t fragId)
 {
+	std::stringstream params;
+	params << "fragId = " << fragId;
+	LogManager::GLog("VoltDBEngine", "setExecutorVectorForFragmentId", 1403, params.str());
     if (m_plans) {
         PlanSet& existing_plans = *m_plans;
         PlanSet::nth_index<1>::type::iterator iter = existing_plans.get<1>().find(fragId);
@@ -1346,6 +1541,9 @@ static bool updateMaterializedViewTargetTable(std::vector<MATVIEW*> & views,
 template<class TABLE> void VoltDBEngine::initMaterializedViews(catalog::Table *catalogTable,
                                                                         TABLE *table)
 {
+	std::stringstream params;
+	params << "catalogTable = " << catalogTable->name();
+	LogManager::GLog("VoltDBEngine", "initMaterializedViews", 1383, params.str());
     // walk views
     BOOST_FOREACH (LabeledView labeledView, catalogTable->views()) {
         catalog::MaterializedViewInfo *catalogView = labeledView.second;
@@ -1422,6 +1620,7 @@ void VoltDBEngine::initMaterializedViewsAndLimitDeletePlans() {
 }
 
 int VoltDBEngine::getResultsSize() const {
+	LogManager::GLog("VoltDBEngine", "getResultSize", 1460, "get result size");
     return static_cast<int>(m_resultOutput.size());
 }
 
@@ -1522,6 +1721,9 @@ std::string VoltDBEngine::debug(void) const
 int VoltDBEngine::getStats(int selector, int locators[], int numLocators,
                            bool interval, int64_t now)
 {
+	//std::stringstream params;
+	//params << "clusterIndex = " << clusterIndex << ", siteId = " << siteId;
+	//LogManager::GLog("VoltDBEngine", "getStats", 1563, "get statistics");
     Table *resultTable = NULL;
     std::vector<CatalogId> locatorIds;
 
@@ -1962,7 +2164,10 @@ int64_t VoltDBEngine::applyBinaryLog(int64_t txnId,
 }
 
 void VoltDBEngine::executeTask(TaskType taskType, ReferenceSerializeInputBE &taskInfo) {
-    switch (taskType) {
+	std::stringstream params;
+	params << "taskType = " << taskType;
+	LogManager::GLog("VoltDBEngine", "executeTask", 2006, params.str());
+	switch (taskType) {
     case TASK_TYPE_VALIDATE_PARTITIONING:
         dispatchValidatePartitioningTask(taskInfo);
         break;

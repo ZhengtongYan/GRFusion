@@ -22,6 +22,7 @@ import org.json_voltpatches.JSONObject;
 import org.json_voltpatches.JSONStringer;
 import org.voltdb.VoltType;
 import org.voltdb.catalog.Column;
+import org.voltdb.catalog.GraphView;
 import org.voltdb.catalog.Table;
 import org.voltdb.planner.parseinfo.StmtTableScan;
 import org.voltdb.plannodes.NodeSchema;
@@ -35,6 +36,8 @@ public class TupleValueExpression extends AbstractValueExpression {
 
     public enum Members {
         COLUMN_IDX,
+        GRAPH_OBJECT, // used to identify if an attribute belongs to either edge or vertex
+        GRAPH_OBJECT_IDX,   // id of edge/vertex in the ordered list of edges/vertexes in the path,e.g. Edge[0], Vertex[2]  
         TABLE_IDX,  // used for JOIN queries only, 0 for outer table, 1 for inner table
     }
 
@@ -44,6 +47,10 @@ public class TupleValueExpression extends AbstractValueExpression {
     protected String m_columnName = null;
     protected String m_columnAlias = null;
     protected int m_tableIdx = 0;
+    
+    protected String m_graphObject = null;  // GVoltDB extension - Vertexes or Edges for GraphView and null for table
+    protected int m_graphObjectIdx = -1;          // Used if m_istableObjectAll = false
+    //protected boolean m_istableObjectAll = true; // True if all idx are included, false if idx is specified as Edges[2]
 
     // Tables that are not persistent tables, but those produced internally,
     // (by subqueries for example) may contains columns whose names are the same.
@@ -78,17 +85,47 @@ public class TupleValueExpression extends AbstractValueExpression {
         super(ExpressionType.VALUE_TUPLE);
         m_tableName = tableName;
         m_tableAlias = tableAlias;
+        m_graphObject = null;
         m_columnName = columnName;
         m_columnAlias = columnAlias;
         m_columnIndex = columnIndex;
         m_differentiator = differentiator;
     }
+    
+    /**
+     * Create a new TupleValueExpression
+     * @param tableName  The name of the table where this column originated,
+     *        if any.  Currently, internally created columns will be assigned
+     *        the table name "VOLT_TEMP_TABLE" for disambiguation.
+     * @param tableAlias  The alias assigned to this table, if any
+     * @param columnName  The name of this column, if any
+     * @param columnAlias  The alias assigned to this column, if any
+     * @param columnIndex. The column index in the table
+     */
+    public TupleValueExpression(String tableName,
+                                String tableAlias,
+                                String tableObject,
+                                String columnName,
+                                String columnAlias,
+                                int columnIndex,
+                                int differentiator,
+                                int graphObjectIdx) {
+        super(ExpressionType.VALUE_TUPLE);
+        m_tableName = tableName;
+        m_tableAlias = tableAlias;
+        m_graphObject = tableObject;
+        m_columnName = columnName;
+        m_columnAlias = columnAlias;
+        m_columnIndex = columnIndex;
+        m_differentiator = differentiator;
+        m_graphObjectIdx = graphObjectIdx;
+    }
 
     public TupleValueExpression(String tableName,
-            String tableAlias,
-            String columnName,
-            String columnAlias,
-            int columnIndex) {
+            					String tableAlias,
+            					String columnName,
+            					String columnAlias,
+            					int    columnIndex) {
         this(tableName, tableAlias, columnName, columnAlias, columnIndex, -1);
     }
 
@@ -129,6 +166,8 @@ public class TupleValueExpression extends AbstractValueExpression {
         clone.m_columnAlias = m_columnAlias;
         clone.m_origStmtId = m_origStmtId;
         clone.m_differentiator = m_differentiator;
+        clone.m_graphObject = m_graphObject;
+        clone.m_graphObjectIdx = m_graphObjectIdx;
         return clone;
     }
 
@@ -217,7 +256,7 @@ public class TupleValueExpression extends AbstractValueExpression {
     }
 
     public void setTableIndex(int idx) {
-        m_tableIdx = idx;
+    	m_tableIdx = idx;
     }
 
     /**
@@ -300,6 +339,16 @@ public class TupleValueExpression extends AbstractValueExpression {
                 return false;
             }
         }
+        
+        if ((m_graphObject == null) != (expr.m_graphObject == null)) {
+            return false;
+        }
+        if (m_graphObject != null) { // Implying both sides non-null
+            if (m_graphObject.equals(expr.m_graphObject) == false) {
+                return false;
+            }
+        }
+        
         return true;
     }
 
@@ -313,6 +362,9 @@ public class TupleValueExpression extends AbstractValueExpression {
         if (m_columnName != null) {
             result += m_columnName.hashCode();
         }
+        if (m_graphObject != null) {
+            result += m_graphObject.hashCode();
+        }
         // defer to the superclass, which factors in other attributes
         return result += super.hashCode();
     }
@@ -321,6 +373,12 @@ public class TupleValueExpression extends AbstractValueExpression {
     public void toJSONString(JSONStringer stringer) throws JSONException {
         super.toJSONString(stringer);
         stringer.key(Members.COLUMN_IDX.name()).value(m_columnIndex);
+        if (m_graphObject != null) {
+        	stringer.key(Members.GRAPH_OBJECT.name()).value(m_graphObject);
+        }
+        if (m_graphObjectIdx != -1) {
+        	stringer.key(Members.GRAPH_OBJECT_IDX.name()).value(m_graphObjectIdx);
+        }
         if (m_tableIdx > 0) {
             stringer.key(Members.TABLE_IDX.name()).value(m_tableIdx);
         }
@@ -355,6 +413,38 @@ public class TupleValueExpression extends AbstractValueExpression {
         setTypeSizeBytes(column.getType(), column.getSize(), column.getInbytes());
     }
 
+    public void resolveForGraph(GraphView graph, String type) {
+        assert(graph != null);
+        // It MAY be that for the case in which this function is called (expression indexes), the column's
+        // table name is not specified (and not missed?).
+        // It is possible to "correct" that here by cribbing it from the supplied table (base table for the index)
+        // -- not bothering for now.
+        Column column;
+        
+        if (type == "vertex") {
+        	column = graph.getVertexprops().getExact(m_columnName);
+            if (m_graphObject == null) m_graphObject = "VERTEXES";
+        }
+        else if (type == "path") {
+        	column = graph.getPathprops().getExact(m_columnName);
+            if (m_graphObject == null) m_graphObject = "PATHS";
+        }
+        else if (type == "startvertex" || type == "endvertex") {
+        	column = graph.getPathprops().getExact(m_columnName);
+            if (m_graphObject == null) m_graphObject = "VERTEXES";
+        }
+        else {
+        	column = graph.getEdgeprops().getExact(m_columnName);
+        	if (m_graphObject == null) m_graphObject = "EDGES";
+        }
+        
+        assert(column != null);
+        m_tableName = graph.getTypeName();
+        m_columnIndex = column.getIndex();
+
+        setTypeSizeBytes(column.getType(), column.getSize(), column.getInbytes());
+    }
+    
     /**
      * Given an input schema, resolve the TVE
      * expressions.
@@ -407,6 +497,9 @@ public class TupleValueExpression extends AbstractValueExpression {
         if (columnName == null || columnName.equals("")) {
             columnName = "column#" + m_columnIndex;
         }
+        
+        // TODO GVoltDB add graphObject to the explanation
+        
         if (m_verboseExplainForDebugging) {
             columnName += " (as JSON: ";
             JSONStringer stringer = new JSONStringer();
@@ -441,12 +534,12 @@ public class TupleValueExpression extends AbstractValueExpression {
     }
 
     private String chooseTwoNames(String name, String alias) {
-        if (name != null) {
+        if (name != null) {        	
             if (alias != null && !name.equals(alias)) {
                 return String.format("%s(%s)", name, alias);
             } else {
                 return name;
-            }
+            }            
         } else if (alias != null) {
             return String.format ("(%s)", alias);
         } else {
@@ -454,6 +547,23 @@ public class TupleValueExpression extends AbstractValueExpression {
         }
     }
 
+    private String chooseThreeNames(String name, String alias, String object) {
+        if (name != null) {
+        	
+            if (alias != null && !name.equals(alias)) {
+            	return (object != null)? String.format("%s(%s).%s", name, alias, object) : 
+                			String.format("%s(%s)", name, alias);// String.format("%s(%s)", fullname, alias);
+            } else {
+                return (object != null)? name+"."+object : name;
+            }
+            
+        } else if (alias != null) {
+            return String.format ("(%s)", alias);
+        } else {
+            return "<none>";
+        }
+    }
+    
     public final boolean needsDifferentiation() {
         return m_needsDifferentiation;
     }
@@ -462,11 +572,19 @@ public class TupleValueExpression extends AbstractValueExpression {
         m_needsDifferentiation = false;
     }
 
+    private String getGraphObjectInfo() {
+    	return (m_graphObjectIdx != -1)? "["+Integer.toString(m_graphObjectIdx)+"]": "";//"[0..*]";
+    }
+    
     @Override
     protected String getExpressionNodeNameForToString() {
-        return String.format("%s: %s.%s(index:%d, diff'tor:%d)",
+    	String obj = null;
+    	if (m_graphObject != null) {
+    		obj = (new StringBuffer()).append(m_graphObject).append(getGraphObjectInfo()).toString();
+    	}
+    	return String.format("%s: %s.%s(index:%d, diff'tor:%d)",
                              super.getExpressionNodeNameForToString(),
-                             chooseTwoNames(m_tableName, m_tableAlias),
+                             chooseThreeNames(m_tableName, m_tableAlias, obj),
                              chooseTwoNames(m_columnName, m_columnAlias),
                              m_columnIndex, m_differentiator);
     }

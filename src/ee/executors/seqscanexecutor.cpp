@@ -133,6 +133,44 @@ bool SeqScanExecutor::p_execute(const NValueArray &params) {
                (int)input_table->activeTupleCount(),
                (int)input_table->allocatedTupleCount());
 
+
+    // invoke Java method that requests for data from other cluster node
+    // and returns the data
+    //msaber: commented the hard coded testing lines of chris as they prevent selection from a single-node cluster
+    /*
+    if (m_engine->getSiteId() == 0) {
+        long destination = 1L;
+
+        vector<ValueType> columnTypes;
+        columnTypes.push_back(VALUE_TYPE_VARCHAR);
+        columnTypes.push_back(VALUE_TYPE_INTEGER);
+
+        vector<int32_t> columnSizes;
+        columnSizes.push_back(20);
+        columnSizes.push_back(NValue::getTupleStorageSize(VALUE_TYPE_INTEGER));
+
+        vector<bool> allowNull(2, false);
+        vector<bool> columnInBytes(2, false);
+
+        vector<string> columnNames;
+        columnNames.push_back("name");
+        columnNames.push_back("age");
+
+        TupleSchema* schema = TupleSchema::createTupleSchema(columnTypes, columnSizes, allowNull, columnInBytes);
+
+        TempTableLimits limit(1024 * 1024 * 100);
+        Table* outputTable = TableFactory::buildTempTable("temp req", schema, columnNames, &limit);
+
+//cout << schema->debug() << endl;
+
+        int result = m_engine->invokeRequestData(outputTable, destination);
+
+        if (result == 1) {
+//cout << outputTable->debug() << endl;
+        }
+    }
+    */
+
     //
     // OPTIMIZATION: NESTED PROJECTION
     //
@@ -245,6 +283,7 @@ bool SeqScanExecutor::p_execute(const NValueArray &params) {
 }
 
 void SeqScanExecutor::outputTuple(CountingPostfilter& postfilter, TableTuple& tuple) {
+	//tuple.setNValue(0, NValue()); //added by msaber
     if (m_aggExec != NULL) {
         m_aggExec->p_execute_tuple(tuple);
         return;

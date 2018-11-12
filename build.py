@@ -218,6 +218,7 @@ CTX.INPUT['catalog'] = """
  statement.cpp
  table.cpp
  tableref.cpp
+ graphview.cpp
 """
 
 CTX.INPUT['structures'] = """
@@ -283,6 +284,10 @@ CTX.INPUT['executors'] = """
  tuplescanexecutor.cpp
  unionexecutor.cpp
  updateexecutor.cpp
+ VertexScanExecutor.cpp
+ EdgeScanExecutor.cpp
+ PathScanExecutor.cpp
+ NestedLoopPathExecutor.cpp
 """
 
 CTX.INPUT['expressions'] = """
@@ -328,6 +333,10 @@ CTX.INPUT['plannodes'] = """
  tuplescannode.cpp
  unionnode.cpp
  updatenode.cpp
+ VertexScanNode.cpp
+ EdgeScanNode.cpp
+ PathScanNode.cpp
+ NestedLoopPathNode.cpp
 """
 
 CTX.INPUT['indexes'] = """
@@ -383,6 +392,15 @@ CTX.INPUT['stats'] = """
 CTX.INPUT['logging'] = """
  JNILogProxy.cpp
  LogManager.cpp
+"""
+
+CTX.INPUT['graph'] = """
+ GraphElement.cpp
+ Edge.cpp
+ Vertex.cpp
+ GraphView.cpp
+ GraphViewFactory.cpp
+ GraphViewCatalogDelegate.cpp
 """
 
 # specify the third party input

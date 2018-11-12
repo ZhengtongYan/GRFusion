@@ -457,6 +457,19 @@ string planNodeToString(PlanNodeType type)
     case PLAN_NODE_TYPE_PARTITIONBY: {
         return "PARTITIONBY";
     }
+    //msaber
+    case PLAN_NODE_TYPE_VERTEXSCAN: {
+            return "VERTEXSCAN";
+    }
+    case PLAN_NODE_TYPE_EDGESCAN: {
+            return "EDGESCAN";
+    }
+    case PLAN_NODE_TYPE_PATHSCAN: {
+            return "PATHSCAN";
+    }
+    case PLAN_NODE_TYPE_NESTEDLOOPPATH: {
+    	return "NESTEDLOOPPATH";
+    }
     } // END OF SWITCH
     return "UNDEFINED";
 }
@@ -511,7 +524,15 @@ PlanNodeType stringToPlanNode(string str )
         return PLAN_NODE_TYPE_TUPLESCAN;
     } else if (str == "PARTITIONBY") {
         return PLAN_NODE_TYPE_PARTITIONBY;
+    } else if (str == "VERTEXSCAN") {
+        return PLAN_NODE_TYPE_VERTEXSCAN;
+    } else if (str == "EDGESCAN") {
+        return PLAN_NODE_TYPE_EDGESCAN;
+    } else if (str == "PATHSCAN") {
+        return PLAN_NODE_TYPE_PATHSCAN;
     }
+
+
     return PLAN_NODE_TYPE_INVALID;
 }
 

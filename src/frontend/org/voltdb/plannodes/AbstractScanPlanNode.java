@@ -39,6 +39,7 @@ import org.voltdb.expressions.TupleValueExpression;
 import org.voltdb.planner.parseinfo.StmtSubqueryScan;
 import org.voltdb.planner.parseinfo.StmtTableScan;
 import org.voltdb.planner.parseinfo.StmtTargetTableScan;
+import org.voltdb.planner.parseinfo.StmtTargetGraphScan;
 import org.voltdb.types.PlanNodeType;
 import org.voltdb.utils.CatalogUtil;
 
@@ -49,7 +50,11 @@ public abstract class AbstractScanPlanNode extends AbstractPlanNode {
         TARGET_TABLE_NAME,
         TARGET_TABLE_ALIAS,
         SUBQUERY_INDICATOR,
-        PREDICATE_FALSE;
+        PREDICATE_FALSE,
+        TARGET_GRAPH_NAME,
+        TARGET_GRAPH_ALIAS,
+        TARGET_OBJECT_NAME,
+    	ISGRAPH;
     }
 
     // Store the columns from the table as an internal NodeSchema
@@ -63,6 +68,9 @@ public abstract class AbstractScanPlanNode extends AbstractPlanNode {
     // The target table is the table that the plannode wants to perform some operation on.
     protected String m_targetTableName = "";
     protected String m_targetTableAlias = null;
+    protected String m_targetObjectName = null;
+    
+    protected boolean isGraph = false;
 
     // Flag marking the sub-query plan
     protected boolean m_isSubQuery = false;
@@ -77,6 +85,14 @@ public abstract class AbstractScanPlanNode extends AbstractPlanNode {
         super();
         m_targetTableName = tableName;
         m_targetTableAlias = tableAlias;
+    }
+    
+    protected AbstractScanPlanNode(String tableName, String tableAlias, String object) {
+        super();
+        m_targetTableName = tableName;
+        m_targetTableAlias = tableAlias;
+        m_targetObjectName = object;
+        isGraph = true;
     }
 
     @Override
@@ -149,6 +165,15 @@ public abstract class AbstractScanPlanNode extends AbstractPlanNode {
     }
 
     /**
+     * @param name
+     */
+    public void setTargetObjectName(String name) {
+        assert(name != null);
+        m_targetObjectName = name;
+        isGraph = true;
+    }
+    
+    /**
      * @param alias
      */
     public void setTargetTableAlias(String alias) {
@@ -161,6 +186,10 @@ public abstract class AbstractScanPlanNode extends AbstractPlanNode {
         setSubQuery(tableScan instanceof StmtSubqueryScan);
         setTargetTableAlias(tableScan.getTableAlias());
         setTargetTableName(tableScan.getTableName());
+        
+        if (tableScan instanceof StmtTargetGraphScan) 
+        	setTargetObjectName(((StmtTargetGraphScan)tableScan).getGraphElementName());
+        
         List<SchemaColumn> scanColumns = tableScan.getScanColumns();
         if (scanColumns != null && ! scanColumns.isEmpty()) {
             setScanColumns(scanColumns);
@@ -250,6 +279,35 @@ public abstract class AbstractScanPlanNode extends AbstractPlanNode {
         return m_isSubQuery;
     }
 
+    /*
+     * GVoltDB
+     * Original VoltDB code, but should be run 3 times for GVoltB 
+     */
+    private void addColsToSchema(CatalogMap<Column> cols, String type) {
+        assert(cols != null);
+        
+        // you don't strictly need to sort this, but it makes diff-ing easier
+        for (Column col : CatalogUtil.getSortedCatalogItems(cols, "index"))
+        {
+            // must produce a tuple value expression for this column.
+            TupleValueExpression tve = new TupleValueExpression(m_targetTableName, 
+            													m_targetTableAlias,
+            													type,
+            													col.getTypeName(), 
+            													col.getTypeName(),
+            													col.getIndex(),
+            													-1,
+            													-1);
+
+            tve.setTypeSizeBytes(col.getType(), col.getSize(), col.getInbytes());
+            m_tableSchema.addColumn(new SchemaColumn(m_targetTableName,
+                                                     m_targetTableAlias,
+                                                     col.getTypeName(),
+                                                     col.getTypeName(),
+                                                     tve, col.getIndex()));
+        }
+    }
+    
     @Override
     public void generateOutputSchema(Database db)
     {
@@ -264,7 +322,27 @@ public abstract class AbstractScanPlanNode extends AbstractPlanNode {
 
             } else {
                 m_tableSchema = new NodeSchema();
-                CatalogMap<Column> cols = db.getTables().getExact(m_targetTableName).getColumns();
+                CatalogMap<Column> cols = null;
+                
+                if (!isGraph)
+                	cols = db.getTables().getExact(m_targetTableName).getColumns();
+                else if (m_targetObjectName == "VERTEXES") 
+                	cols = db.getGraphviews().getExact(m_targetTableName).getVertexprops();
+                else if (m_targetObjectName == "EDGES")
+                	cols = db.getGraphviews().getExact(m_targetTableName).getEdgeprops();
+                else if (m_targetObjectName == "PATHS") {
+                	//cols = db.getGraphviews().getExact(m_targetTableName).getVertexprops();
+                	//addColsToSchema(cols, "VERTEXES");
+                	//cols = db.getGraphviews().getExact(m_targetTableName).getEdgeprops();
+                	//addColsToSchema(cols, "EDGES");
+                	cols = db.getGraphviews().getExact(m_targetTableName).getPathprops();
+                }
+
+                addColsToSchema(cols, m_targetObjectName);
+                
+                /*
+                assert(cols != null);
+                
                 // you don't strictly need to sort this, but it makes diff-ing easier
                 for (Column col : CatalogUtil.getSortedCatalogItems(cols, "index"))
                 {
@@ -280,6 +358,7 @@ public abstract class AbstractScanPlanNode extends AbstractPlanNode {
                                                              col.getTypeName(),
                                                              tve, col.getIndex()));
                 }
+                */
             }
         }
 
@@ -333,6 +412,9 @@ public abstract class AbstractScanPlanNode extends AbstractPlanNode {
             for (TupleValueExpression tve : scan_tves)
             {
                 int index = tve.resolveColumnIndexesUsingSchema(m_tableSchema);
+                
+                //System.out.println("AbstractScanPlanNode 415: "+m_tableSchema);
+                
                 tve.setColumnIndex(index);
             }
             m_tableScanSchema.sortByTveIndex();
@@ -384,6 +466,9 @@ public abstract class AbstractScanPlanNode extends AbstractPlanNode {
         for (TupleValueExpression tve : predicate_tves)
         {
             int index = tve.resolveColumnIndexesUsingSchema(m_tableSchema);
+            
+            //System.out.println("AbstractScanPlanNode 469: "+m_tableSchema);
+            
             tve.setColumnIndex(index);
         }
 
@@ -408,6 +493,9 @@ public abstract class AbstractScanPlanNode extends AbstractPlanNode {
                 assert(col.getExpression() instanceof TupleValueExpression);
                 TupleValueExpression tve = (TupleValueExpression)col.getExpression();
                 int index = tve.resolveColumnIndexesUsingSchema(m_tableSchema);
+                
+                //System.out.println("AbstractScanPlanNode 496: "+m_tableSchema);
+                
                 tve.setColumnIndex(index);
             }
             m_outputSchema.sortByTveIndex();
@@ -453,8 +541,14 @@ public abstract class AbstractScanPlanNode extends AbstractPlanNode {
             stringer.key(Members.PREDICATE.name());
             stringer.value(m_predicate);
         }
-        stringer.key(Members.TARGET_TABLE_NAME.name()).value(m_targetTableName);
-        stringer.key(Members.TARGET_TABLE_ALIAS.name()).value(m_targetTableAlias);
+        stringer.key(Members.ISGRAPH.name()).value(String.valueOf(isGraph).toUpperCase());
+        if (!isGraph) {
+        	stringer.key(Members.TARGET_TABLE_NAME.name()).value(m_targetTableName);
+        	stringer.key(Members.TARGET_TABLE_ALIAS.name()).value(m_targetTableAlias);
+        } else {
+        	stringer.key(Members.TARGET_GRAPH_NAME.name()).value(m_targetTableName);
+        	stringer.key(Members.TARGET_GRAPH_ALIAS.name()).value(m_targetTableAlias);        	
+        }
         if (m_isSubQuery) {
             stringer.key(Members.SUBQUERY_INDICATOR.name()).value("TRUE");
         }
@@ -462,10 +556,22 @@ public abstract class AbstractScanPlanNode extends AbstractPlanNode {
 
     @Override
     public void loadFromJSONObject( JSONObject jobj, Database db ) throws JSONException {
-        helpLoadFromJSONObject(jobj, db);
+    	helpLoadFromJSONObject(jobj, db);
         m_predicate = AbstractExpression.fromJSONChild(jobj, Members.PREDICATE.name(), m_tableScan);
-        m_targetTableName = jobj.getString( Members.TARGET_TABLE_NAME.name() );
-        m_targetTableAlias = jobj.getString( Members.TARGET_TABLE_ALIAS.name() );
+        isGraph = Boolean.valueOf( jobj.getString( Members.ISGRAPH.name() ));
+        if (!isGraph) {
+        	m_targetTableName = jobj.getString( Members.TARGET_TABLE_NAME.name() );
+        	m_targetTableAlias = jobj.getString( Members.TARGET_TABLE_ALIAS.name() );
+        } else {
+        	m_targetTableName = jobj.getString( Members.TARGET_GRAPH_NAME.name() );
+        	m_targetTableAlias = jobj.getString( Members.TARGET_GRAPH_ALIAS.name() );
+        }
+        //if (m_targetTableName == null) {
+        //	m_targetTableName = jobj.getString( Members.TARGET_GRAPH_NAME.name() );
+        //	m_targetTableAlias = jobj.getString( Members.TARGET_GRAPH_ALIAS.name() );   
+        //  m_targetObjectName = jobj.getString( Members.TARGET_OBJECT_NAME.name() );
+        //    isGraph = true;
+        //}
         if (jobj.has("SUBQUERY_INDICATOR")) {
             m_isSubQuery = "TRUE".equals(jobj.getString( Members.SUBQUERY_INDICATOR.name() ));
         }

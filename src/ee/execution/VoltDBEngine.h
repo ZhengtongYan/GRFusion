@@ -78,6 +78,7 @@ namespace catalog {
 class Catalog;
 class Database;
 class Table;
+class GraphView;
 }
 
 namespace voltdb {
@@ -91,7 +92,9 @@ class PersistentTable;
 class RecoveryProtoMsg;
 class StreamedTable;
 class Table;
+class GraphView;
 class TableCatalogDelegate;
+class GraphViewCatalogDelegate;
 class TempTableLimits;
 class Topend;
 class TheHashinator;
@@ -133,6 +136,10 @@ class __attribute__((visibility("default"))) VoltDBEngine {
         TableCatalogDelegate* getTableDelegate(const std::string& name) const;
         catalog::Database* getDatabase() const { return m_database; }
         catalog::Table* getCatalogTable(const std::string& name) const;
+        //msaber
+        catalog::GraphView* getCatalogGraphView(const std::string& name) const;
+        GraphViewCatalogDelegate* getGraphViewDelegate(const std::string& name) const;
+
         bool getIsActiveActiveDREnabled() const { return m_isActiveActiveDREnabled; }
         StreamedTable* getPartitionedDRConflictStreamedTable() const { return m_drPartitionedConflictStreamedTable; }
         StreamedTable* getReplicatedDRConflictStreamedTable() const { return m_drReplicatedConflictStreamedTable; }
@@ -142,6 +149,8 @@ class __attribute__((visibility("default"))) VoltDBEngine {
             m_drPartitionedConflictStreamedTable = partitionedConflictTable;
             m_drReplicatedConflictStreamedTable = replicatedConflictTable;
         }
+
+        int64_t getSiteId();
 
         // -------------------------------------------------
         // Execution Functions
@@ -184,6 +193,11 @@ class __attribute__((visibility("default"))) VoltDBEngine {
         // -------------------------------------------------
         bool send(Table* dependency);
         int loadNextDependency(Table* destination);
+
+        // -------------------------------------------------
+        // Request Data Functions
+        // -------------------------------------------------
+        int invokeRequestData(Table* destination, long destinationHsId);
 
         // -------------------------------------------------
         // Catalog Functions
@@ -402,6 +416,9 @@ class __attribute__((visibility("default"))) VoltDBEngine {
 
         void rebuildTableCollections();
 
+        //msaber: added to build the graph view collections
+        void rebuildGraphViewCollections();
+
         int64_t tempTableMemoryLimit() const {
             return m_tempTableMemoryLimit;
         }
@@ -491,14 +508,28 @@ class __attribute__((visibility("default"))) VoltDBEngine {
         /*
          * Catalog delegates hashed by path.
          */
+        //msaber: key is the table path
         std::map<std::string, TableCatalogDelegate*> m_catalogDelegates;
+        //msaber: key is the table name
         std::map<std::string, TableCatalogDelegate*> m_delegatesByName;
+
+        //msaber: adding the corresponding collections for the graph views
+        //key is the graph view path
+        std::map<std::string, GraphViewCatalogDelegate*> m_graphViewCatalogDelegates;
+        //key is the graph view name
+        std::map<std::string, GraphViewCatalogDelegate*> m_graphViewDelegatesByName;
 
         // map catalog table id to table pointers
         std::map<CatalogId, Table*> m_tables;
 
+        //msaber: map catalog graphview id to graphview pointers
+        std::map<CatalogId, GraphView*> m_graphViews;
+
         // map catalog table name to table pointers
         std::map<std::string, Table*> m_tablesByName;
+
+        //msaber: map catalog graphview name to graphview pointers
+        std::map<std::string, GraphView*> m_graphViewsByName;
 
         /*
          * Map of catalog table ids to snapshotting tables.

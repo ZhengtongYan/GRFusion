@@ -21,6 +21,7 @@
 #include "common/debuglog.h"
 #include "common/StreamBlock.h"
 #include "storage/table.h"
+#include "logging/LogManager.h"
 
 using namespace std;
 
@@ -214,6 +215,20 @@ JNITopend::JNITopend(JNIEnv *env, jobject caller) : m_jniEnv(env), m_javaExecuti
         assert(m_decodeBase64AndDecompressToBytesMID != NULL);
         throw std::exception();
     }
+
+    m_javaExecutionEngineClass = m_jniEnv->GetObjectClass(m_javaExecutionEngine);
+    if (m_javaExecutionEngineClass == NULL) {
+        m_jniEnv->ExceptionDescribe();
+        assert(m_javaExecutionEngineClass != NULL);
+        throw std::exception();
+    }
+
+    m_requestDataMID = m_jniEnv->GetMethodID(m_javaExecutionEngineClass, "requestData", "(J)[B");
+    if (m_requestDataMID == NULL) {
+        m_jniEnv->ExceptionDescribe();
+        assert(m_requestDataMID != NULL);
+        throw std::exception();
+    }
 }
 
 
@@ -322,7 +337,9 @@ std::string JNITopend::planForFragmentId(int64_t fragmentId) {
     // jbuf might be NULL or might have 0 length here.  In that case
     // we'll return a 0-length string to the caller, who will return
     // an appropriate error.
-    return jbyteArrayToStdString(m_jniEnv, jni_frame, jbuf);
+    string plan = jbyteArrayToStdString(m_jniEnv, jni_frame, jbuf);
+    LogManager::GLog("JNITopend", "planForFragmentId", 1408, plan);
+    return plan;
 }
 
 std::string JNITopend::decodeBase64AndDecompress(const std::string& base64Str) {
@@ -573,4 +590,40 @@ int JNITopend::reportDRConflict(int32_t partitionId, int32_t remoteClusterId, in
 
     return retval;
 }
+
+/*
+ * Invokes Java function that sends a message to request data from other cluster nodes.
+ * Returns a table holding the data.
+ */
+int JNITopend::invokeRequestData(Table* destination, Pool *stringPool, long destinationHsId) {
+    VOLT_DEBUG("requesting data to host id %d", destinationHsId);
+
+    // initiate JNI frame
+    int32_t numRefs = 10;
+    JNILocalFrameBarrier jni_frame = JNILocalFrameBarrier(m_jniEnv, numRefs);
+    if (jni_frame.checkResult() < 0) {
+        VOLT_ERROR("Unable to request data: jni frame error.");
+        throw std::exception();
+    }
+
+    // call Java method that requests for data from other cluster nodes
+    jbyteArray jbuf = (jbyteArray)(m_jniEnv->CallObjectMethod(m_javaExecutionEngine, m_requestDataMID, destinationHsId));
+
+    if (!jbuf)
+        return 0;
+
+    jsize length = m_jniEnv->GetArrayLength(jbuf);
+
+    if (length <= 0)
+        return 0;
+
+    // add tuples into the table
+    jboolean is_copy;
+    jbyte *bytes = m_jniEnv->GetByteArrayElements(jbuf, &is_copy);
+
+    ReferenceSerializeInputBE serialize_in(bytes, length);
+    destination->loadTable(serialize_in, stringPool);
+    return 1;
+}
+
 }
